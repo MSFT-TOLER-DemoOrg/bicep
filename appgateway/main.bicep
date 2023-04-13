@@ -1,124 +1,130 @@
-param appName string
-param location string
-param vnetName string
-param subnetName string
-param backendPoolName string
-param backendPoolAddress string
-param backendPoolPort int
+param rgName string
+param agName string
+param agPublicIpName string
 param listenerName string
-param frontendPort int
 param certName string
 param certData string
+param certPassword string
 
-resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
-  name: appName
-  location: location
-}
-
-resource vnet 'Microsoft.Network/virtualNetworks@2021-02-01' = {
-  name: vnetName
-  location: location
-  resourceGroup: rg
-  properties: {
-    addressSpace: {
-      addressPrefixes: [
-        '10.0.0.0/16'
-      ]
-    }
-    subnets: [
-      {
-        name: subnetName
-        properties: {
-          addressPrefix: '10.0.0.0/24'
-        }
-      }
-    ]
-  }
-}
-
-resource publicIp 'Microsoft.Network/publicIPAddresses@2021-02-01' = {
-  name: '${appName}-pip'
-  location: location
-  resourceGroup: rg
+resource agPublicIp 'Microsoft.Network/publicIPAddresses@2021-03-01' = {
+  name: agPublicIpName
+  location: resourceGroup().location
   properties: {
     publicIPAllocationMethod: 'Static'
   }
 }
 
-resource frontendIp 'Microsoft.Network/applicationGateways/frontendIPConfigurations@2021-02-01' = {
-  name: '${appName}-frontendIp'
-  location: location
-  resourceGroup: rg
+resource agSubnet 'Microsoft.Network/virtualNetworks/subnets@2021-03-01' = {
+  name: 'AppGatewaySubnet'
   properties: {
-    publicIPAddress: {
-      id: publicIp.id
-    }
+    addressPrefix: '10.0.2.0/24'
   }
 }
 
-resource frontendPort 'Microsoft.Network/applicationGateways/frontendPorts@2021-02-01' = {
-  name: '${appName}-frontendPort'
-  location: location
-  resourceGroup: rg
-  properties: {
-    port: frontendPort
-  }
-}
-
-resource cert 'Microsoft.Network/applicationGateways/sslCertificates@2021-02-01' = {
-  name: '${appName}-cert'
-  location: location
-  resourceGroup: rg
-  properties: {
-    data: certData
-    password: ''
-  }
-}
-
-resource backendPool 'Microsoft.Network/applicationGateways/backendAddressPools@2021-02-01' = {
-  name: backendPoolName
-  location: location
-  resourceGroup: rg
-}
-
-resource backendAddress 'Microsoft.Network/applicationGateways/backendAddressPools/backendAddresses@2021-02-01' = {
-  name: '${backendPoolName}-address'
-  location: location
-  resourceGroup: rg
-  properties: {
-    ipAddress: backendPoolAddress
-  }
+resource ag 'Microsoft.Network/applicationGateways@2021-03-01' = {
+  name: agName
+  location: resourceGroup().location
   dependsOn: [
-    backendPool
+    agPublicIp
   ]
-}
-
-resource httpSettings 'Microsoft.Network/applicationGateways/backendHttpSettingsCollection@2021-02-01' = {
-  name: '${appName}-httpSettings'
-  location: location
-  resourceGroup: rg
   properties: {
-    port: backendPoolPort
-    protocol: 'Https'
-    cookieBasedAffinity: 'Disabled'
-    pickHostNameFromBackendAddress: true
-    requestTimeout: 20
-    probeEnabled: true
-    probe: {
-      protocol: 'Https'
-      path: '/grpc.health.v1.Health/Check'
-      interval: 30
-      timeout: 30
-      unhealthyThreshold: 3
-      pickHostNameFromBackendHttpSettings: true
+    sku: {
+      name: 'Standard_v2'
+      tier: 'Standard_v2'
     }
+    gatewayIPConfigurations: [
+      {
+        name: 'appGatewayIpConfig'
+        properties: {
+          subnet: {
+            id: resourceGroup().id + '/providers/Microsoft.Network/virtualNetworks/VNet/subnets/' + agSubnet.name
+          }
+          publicIPAddress: {
+            id: resourceGroup().id + '/providers/Microsoft.Network/publicIPAddresses/' + agPublicIp.name
+          }
+        }
+      }
+    ]
+    sslCertificates: [
+      {
+        name: certName
+        properties: {
+          data: certData
+          password: certPassword
+        }
+      }
+    ]
+    frontendIPConfigurations: [
+      {
+        name: 'appGatewayFrontendIP'
+        properties: {
+          privateIPAllocationMethod: 'Dynamic'
+          publicIPAddress: {
+            id: agPublicIp.id
+          }
+        }
+      }
+    ]
+    frontendPorts: [
+      {
+        name: 'appGatewayFrontendPort'
+        properties: {
+          port: 443
+        }
+      }
+    ]
+    backendAddressPools: [
+      {
+        name: 'appGatewayBackendPool'
+      }
+    ]
+    backendHttpSettingsCollection: [
+      {
+        name: 'appGatewayBackendHttpSettings'
+        properties: {
+          port: 80
+          protocol: 'Http'
+          cookieBasedAffinity: 'Disabled'
+          pickHostNameFromBackendAddress: true
+        }
+      }
+    ]
+    httpListeners: [
+      {
+        name: listenerName
+        properties: {
+          frontendIPConfiguration: {
+            id: ag.frontendIPConfigurations[0].id
+          }
+          frontendPort: {
+            id: ag.frontendPorts[0].id
+          }
+          protocol: 'Https'
+          sslCertificate: {
+            id: ag.sslCertificates[0].id
+          }
+          requireServerNameIndication: true
+        }
+      }
+    ]
+    requestRoutingRules: [
+      {
+        name: 'rule1'
+        properties: {
+          ruleType: 'Basic'
+          httpListener: {
+            id: ag.httpListeners[0].id
+          }
+          backendAddressPool: {
+            id: ag.backendAddressPools[0].id
+          }
+          backendHttpSettings: {
+            id: ag.backendHttpSettingsCollection[0].id
+          }
+        }
+      }
+    ]
+    enableHttp2: true
+    gatewayIPConfigurationsTextFormat: true
   }
-  dependsOn: [
-    backendPool
-  ]
 }
-
-resource listener 'Microsoft.Network/applicationGateways/httpListeners@2021-02-01' = {
-  name: listenerName
-  location: location
-  resourceGroup: rg 

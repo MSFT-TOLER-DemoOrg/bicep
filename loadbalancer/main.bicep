@@ -1,63 +1,34 @@
-param appName string
-param location string
+param rgName string
+param lbName string
 param vnetName string
 param subnetName string
-param backendPoolName string
-param backendPoolAddress string
-param backendPoolPort int
-param frontendIpName string
-param frontendIpConfigName string
-param frontendPortName string
-param frontendPort int
-param probeName string
-param probeProtocol string
-param probePort int
-param probeInterval int
-param probeThreshold int
-param ruleName string
-param listenerName string
+param frontendIPName string
+param frontendIPConfigType string = 'Private'
+param frontendIPPrivateAddress string
 param certName string
 param certData string
+param certPassword string
+param backendPoolName string
+param healthProbeName string
+param backendPort int = 80
+param protocol string = 'TCP'
 
-resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
-  name: appName
-  location: location
-}
-
-resource vnet 'Microsoft.Network/virtualNetworks@2021-02-01' = {
-  name: vnetName
-  location: location
-  resourceGroup: rg
-  properties: {
-    addressSpace: {
-      addressPrefixes: [
-        '10.0.0.0/16'
-      ]
-    }
-    subnets: [
-      {
-        name: subnetName
-        properties: {
-          addressPrefix: '10.0.0.0/24'
-        }
-      }
-    ]
-  }
-}
-
-resource lb 'Microsoft.Network/loadBalancers@2021-02-01' = {
-  name: '${appName}-lb'
-  location: location
-  resourceGroup: rg
+resource lb 'Microsoft.Network/loadBalancers@2021-03-01' = {
+  name: lbName
+  location: resourceGroup().location
   properties: {
     frontendIPConfigurations: [
       {
-        name: frontendIpConfigName
+        name: frontendIPName
         properties: {
-          publicIPAddress: null
-          privateIPAddress: null
+          privateIPAddress: frontendIPPrivateAddress
           subnet: {
-            id: vnet.subnets[0].id
+            id: resourceGroup().id + '/providers/Microsoft.Network/virtualNetworks/' + vnetName + '/subnets/' + subnetName
+          }
+          privateIPAllocationMethod: if(frontendIPConfigType == 'Private') {
+            'Dynamic'
+          } else {
+            'Static'
           }
         }
       }
@@ -69,7 +40,7 @@ resource lb 'Microsoft.Network/loadBalancers@2021-02-01' = {
     ]
     loadBalancingRules: [
       {
-        name: ruleName
+        name: 'rule1'
         properties: {
           frontendIPConfiguration: {
             id: lb.frontendIPConfigurations[0].id
@@ -77,61 +48,49 @@ resource lb 'Microsoft.Network/loadBalancers@2021-02-01' = {
           backendAddressPool: {
             id: lb.backendAddressPools[0].id
           }
-          protocol: 'Tcp'
-          frontendPort: frontendPort
-          backendPort: backendPoolPort
+          protocol: protocol
+          frontendPort: 443
+          backendPort: backendPort
           enableFloatingIP: false
-          idleTimeoutInMinutes: 5
-          loadDistribution: 'Default'
+          enableTcpReset: false
+          idleTimeoutInMinutes: 15
           probe: {
             id: lb.probes[0].id
           }
+          disableOutboundSnat: true
+          loadDistribution: 'SourceIP'
+          sslCertificates: [
+            {
+              id: resourceGroup().id + '/providers/Microsoft.Network/loadBalancers/' + lbName + '/frontendIPConfigurations/' + frontendIPName + '/sslCertificates/' + certName
+            }
+          ]
         }
       }
     ]
     probes: [
       {
-        name: probeName
+        name: healthProbeName
         properties: {
-          protocol: probeProtocol
-          port: probePort
-          intervalInSeconds: probeInterval
-          numberOfProbes: probeThreshold
-        }
-      }
-    ]
-  }
-}
-
-resource nic 'Microsoft.Network/networkInterfaces@2021-02-01' = {
-  name: '${appName}-nic'
-  location: location
-  resourceGroup: rg
-  properties: {
-    ipConfigurations: [
-      {
-        name: 'ipconfig'
-        properties: {
-          subnet: {
-            id: vnet.subnets[0].id
-          }
-          loadBalancerBackendAddressPools: [
-            {
-              id: lb.backendAddressPools[0].id
+          protocol: protocol
+          port: backendPort
+          intervalInSeconds: 15
+          numberOfProbes: 2
+          requestPath: '/'
+          protocolSettings: {
+            port: backendPort
+            settings: {
+              sslSettings: {
+                serverNameIndication: 'Enabled'
+                serverCertificate: {
+                  name: certName
+                  data: certData
+                  password: certPassword
+                }
+              }
             }
-          ]
-          loadBalancerInboundNatRules: []
-          privateIPAddressVersion: 'IPv4'
-          primary: true
-          publicIPAddress: null
+          }
         }
       }
     ]
   }
 }
-
-resource vm 'Microsoft.Compute/virtualMachines@2021-03-01' = {
-  name: '${appName}-vm'
-  location: location
-  resourceGroup: rg
-  properties: {
